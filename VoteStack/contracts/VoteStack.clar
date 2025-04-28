@@ -244,3 +244,56 @@
     true
 )
 
+;; Implement a delegated voting mechanism that allows voters to
+;; delegate their voting power to trusted representatives
+(define-public (delegate-voting-power (election-id uint) (delegate principal))
+    (let ((election (unwrap! (map-get? elections { election-id: election-id }) (err ERR-NOT-FOUND)))
+          (current-block block-height)
+          (voter-data (unwrap! (map-get? voters { election-id: election-id, voter: tx-sender }) (err ERR-NOT-FOUND)))
+          (delegate-data (map-get? voters { election-id: election-id, voter: delegate })))
+        
+        ;; Check if voting period hasn't started
+        (asserts! (< current-block (get start-block election)) (err ERR-VOTING-CLOSED))
+        
+        ;; Check if voter is registered and hasn't voted
+        (asserts! (get registered voter-data) (err ERR-UNAUTHORIZED))
+        (asserts! (not (get voted voter-data)) (err ERR-ALREADY-VOTED))
+        
+        ;; Check if delegate is registered
+        (asserts! (and (is-some delegate-data) 
+                      (get registered (unwrap! delegate-data (err ERR-NOT-FOUND))))
+                 (err ERR-UNAUTHORIZED))
+        
+        ;; Update delegate's voting weight
+        (map-set voters
+            { election-id: election-id, voter: delegate }
+            (merge (unwrap! delegate-data (err ERR-NOT-FOUND))
+                { 
+                    weight: (+ (get weight (unwrap! delegate-data (err ERR-NOT-FOUND))) 
+                              (get weight voter-data)) 
+                }
+            )
+        )
+        
+        ;; Mark original voter as having voted (by delegation)
+        (map-set voters
+            { election-id: election-id, voter: tx-sender }
+            (merge voter-data 
+                { 
+                    voted: true,
+                    vote-timestamp: (some block-height)
+                }
+            )
+        )
+        
+        ;; Record delegation event
+        (print { event: "vote-delegated", 
+                election: election-id, 
+                delegator: tx-sender, 
+                delegate: delegate, 
+                weight: (get weight voter-data) })
+        
+        (ok true)
+    )
+)
+
